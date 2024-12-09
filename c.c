@@ -1,10 +1,8 @@
-#include <sys/socket.h>     // 提供 socket 函數
-#include <netinet/in.h>     // 提供 sockaddr_in 結構
-#include <string.h>         // 提供字符串處理函數
-#include <stdio.h>          // 提供標準輸入輸出
-#include <stdlib.h>         // 提供標準庫函數
-#include <arpa/inet.h>      // 提供 inet_addr 函數
-#include <unistd.h>         // 提供 close 函數
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
 #include <openssl/conf.h>
 #include <openssl/evp.h>
 #include <openssl/err.h>
@@ -76,23 +74,40 @@ int main(void) {
     server.sin_addr.s_addr = inet_addr("127.0.0.1");
     server.sin_port = htons(5678);
 
-    sock = socket(PF_INET, SOCK_STREAM, 0);
-    connect(sock, (struct sockaddr*)&server, sizeof(server));
+    while (1) {
+        sock = socket(PF_INET, SOCK_STREAM, 0);
+        if (connect(sock, (struct sockaddr*)&server, sizeof(server)) < 0) {
+            perror("Connection failed. Retrying in 5 seconds...");
+            close(sock);
+            sleep(5);
+            continue;
+        }
 
-    do {
-        ciphertext_len = encrypt((unsigned char*)buf, strlen(buf), key, iv, ciphertext);
-        send(sock, ciphertext, ciphertext_len, 0);
-        printf("Send Message: %s", buf);
+        printf("Connected to server.\n");
 
-        readSize = recv(sock, buf, sizeof(buf), 0);
-        decryptedtext_len = decrypt((unsigned char*)buf, readSize, key, iv, decryptedtext);
-        decryptedtext[decryptedtext_len] = '\0';
-        printf("Read Message: %s\n", decryptedtext);
-    } while (fgets(buf, 255, stdin));
+        do {
+            ciphertext_len = encrypt((unsigned char*)buf, strlen(buf), key, iv, ciphertext);
+            if (send(sock, ciphertext, ciphertext_len, 0) < 0) {
+                perror("Send failed. Reconnecting...");
+                break;
+            }
+            printf("Send Message: %s", buf);
 
-    buf[0] = '\0';
-    send(sock, buf, 0, 0);
-    printf("Close connection!\n");
-    close(sock);
+            readSize = recv(sock, buf, sizeof(buf), 0);
+            if (readSize <= 0) {
+                perror("Receive failed. Reconnecting...");
+                break;
+            }
+            decryptedtext_len = decrypt((unsigned char*)buf, readSize, key, iv, decryptedtext);
+            decryptedtext[decryptedtext_len] = '\0';
+            printf("Read Message: %s\n", decryptedtext);
+        } while (fgets(buf, 255, stdin));
+
+        buf[0] = '\0';
+        send(sock, buf, 0, 0);
+        printf("Close connection!\n");
+        close(sock);
+    }
+
+    return 0;
 }
-//add sth
