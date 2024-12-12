@@ -8,6 +8,7 @@
 #include <openssl/conf.h>
 #include <openssl/evp.h>
 #include <openssl/err.h>
+#include <sys/select.h>     // 提供 select 函數
 
 void handleErrors(void) {
     ERR_print_errors_fp(stderr);
@@ -59,6 +60,7 @@ int decrypt(unsigned char *ciphertext, int ciphertext_len, unsigned char *key,
 
     return plaintext_len;
 }
+
 int main(void) {
     struct sockaddr_in server, client;
     int sock, csock, readSize, addressSize;
@@ -68,6 +70,9 @@ int main(void) {
     unsigned char ciphertext[256];
     unsigned char decryptedtext[256];
     int decryptedtext_len, ciphertext_len;
+    fd_set readfds;
+    int max_sd, sd, activity, i, valread;
+    int client_socket[30] = {0};
 
     bzero(&server, sizeof(server));
 
@@ -80,21 +85,56 @@ int main(void) {
     listen(sock, 5);
 
     addressSize = sizeof(client);
-    csock = accept(sock, (struct sockaddr*)&client, &addressSize);
 
     while (1) {
-        readSize = recv(csock, buf, sizeof(buf), 0);
-        if (!readSize) break;
+        FD_ZERO(&readfds);
+        FD_SET(sock, &readfds);
+        max_sd = sock;
 
-        decryptedtext_len = decrypt((unsigned char*)buf, readSize, key, iv, decryptedtext);
-        decryptedtext[decryptedtext_len] = '\0';
-        printf("Read Message: %s", decryptedtext);
+        for (i = 0; i < 30; i++) {
+            sd = client_socket[i];
+            if (sd > 0) FD_SET(sd, &readfds);
+            if (sd > max_sd) max_sd = sd;
+        }
 
-        ciphertext_len = encrypt(decryptedtext, decryptedtext_len, key, iv, ciphertext);
-        send(csock, ciphertext, ciphertext_len, 0);
+        activity = select(max_sd + 1, &readfds, NULL, NULL, NULL);
+
+        if (FD_ISSET(sock, &readfds)) {
+            csock = accept(sock, (struct sockaddr*)&client, &addressSize);
+            printf("New connection, socket fd is %d, ip is : %s, port : %d\n",
+                   csock, inet_ntoa(client.sin_addr), ntohs(client.sin_port));
+
+            for (i = 0; i < 30; i++) {
+                if (client_socket[i] == 0) {
+                    client_socket[i] = csock;
+                    printf("Adding to list of sockets as %d\n", i);
+                    break;
+                }
+            }
+        }
+
+        for (i = 0; i < 30; i++) {
+            sd = client_socket[i];
+
+            if (FD_ISSET(sd, &readfds)) {
+                if ((valread = read(sd, buf, 256)) == 0) {
+                    getpeername(sd, (struct sockaddr*)&client, (socklen_t*)&addressSize);
+                    printf("Host disconnected, ip %s, port %d\n",
+                           inet_ntoa(client.sin_addr), ntohs(client.sin_port));
+                    close(sd);
+                    client_socket[i] = 0;
+                } else {
+                    decryptedtext_len = decrypt((unsigned char*)buf, valread, key, iv, decryptedtext);
+                    decryptedtext[decryptedtext_len] = '\0';
+                    printf("Read Message: %s", decryptedtext);
+
+                    ciphertext_len = encrypt(decryptedtext, decryptedtext_len, key, iv, ciphertext);
+                    send(sd, ciphertext, ciphertext_len, 0);
+                }
+            }
+        }
     }
 
-    printf("Client has closed the connection.\n");
     close(sock);
-    exit(0);
+    return 0;
 }
