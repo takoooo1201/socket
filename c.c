@@ -6,6 +6,7 @@
 #include <openssl/conf.h>
 #include <openssl/evp.h>
 #include <openssl/err.h>
+#include <errno.h>
 
 void handleErrors(void) {
     ERR_print_errors_fp(stderr);
@@ -61,9 +62,9 @@ int decrypt(unsigned char *ciphertext, int ciphertext_len, unsigned char *key,
 int main(void) {
     struct sockaddr_in server;
     int sock, readSize;
-    char buf[256] = "TCP TEST\n";
+    char buf[256];
     unsigned char key[32] = "01234567890123456789012345678901"; // 256-bit key
-    unsigned char iv[16] = "0123456789012345"; // 128-bit IV
+    unsigned char iv[16] = "0123456789012345";                  // 128-bit IV
     unsigned char ciphertext[256];
     unsigned char decryptedtext[256];
     int decryptedtext_len, ciphertext_len;
@@ -76,6 +77,12 @@ int main(void) {
 
     while (1) {
         sock = socket(PF_INET, SOCK_STREAM, 0);
+        if (sock < 0) {
+            perror("Socket creation failed");
+            sleep(5);
+            continue;
+        }
+
         if (connect(sock, (struct sockaddr*)&server, sizeof(server)) < 0) {
             perror("Connection failed. Retrying in 5 seconds...");
             close(sock);
@@ -85,28 +92,49 @@ int main(void) {
 
         printf("Connected to server.\n");
 
-        do {
+        // Set socket receive timeout
+        struct timeval timeout;
+        timeout.tv_sec = 5;   // 5 seconds timeout
+        timeout.tv_usec = 0;
+        if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
+            perror("setsockopt failed");
+        }
+
+        // (Optional) Set socket send timeout
+        if (setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
+            perror("setsockopt failed");
+        }
+
+        printf("Enter messages to send to the server:\n");
+
+        while (fgets(buf, sizeof(buf), stdin)) {
             ciphertext_len = encrypt((unsigned char*)buf, strlen(buf), key, iv, ciphertext);
-            if (send(sock, ciphertext, ciphertext_len, 0) < 0) {
+            if (send(sock, ciphertext, ciphertext_len, 0) <= 0) {
                 perror("Send failed. Reconnecting...");
+                close(sock);
                 break;
             }
-            printf("Send Message: %s", buf);
+            printf("Sent Message: %s", buf);
 
             readSize = recv(sock, buf, sizeof(buf), 0);
-            if (readSize <= 0) {
-                perror("Receive failed. Reconnecting...");
+            if (readSize > 0) {
+                decryptedtext_len = decrypt((unsigned char*)buf, readSize, key, iv, decryptedtext);
+                decryptedtext[decryptedtext_len] = '\0';
+                printf("Received Message: %s\n", decryptedtext);
+            } else if (readSize == 0) {
+                printf("Server closed the connection. Reconnecting...\n");
+                close(sock);
+                break;
+            } else {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    printf("Receive timeout occurred. Reconnecting...\n");
+                } else {
+                    perror("Receive failed. Reconnecting...");
+                }
+                close(sock);
                 break;
             }
-            decryptedtext_len = decrypt((unsigned char*)buf, readSize, key, iv, decryptedtext);
-            decryptedtext[decryptedtext_len] = '\0';
-            printf("Read Message: %s\n", decryptedtext);
-        } while (fgets(buf, 255, stdin));
-
-        buf[0] = '\0';
-        send(sock, buf, 0, 0);
-        printf("Close connection!\n");
-        close(sock);
+        }
     }
 
     return 0;

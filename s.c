@@ -126,7 +126,7 @@ int main(void) {
                 } else {
                     decryptedtext_len = decrypt((unsigned char*)buf, valread, key, iv, decryptedtext);
                     decryptedtext[decryptedtext_len] = '\0';
-                    printf("Read Message: %s", decryptedtext);
+                    printf("Read Message from %d: %s", i,decryptedtext);
 
                     ciphertext_len = encrypt(decryptedtext, decryptedtext_len, key, iv, ciphertext);
                     send(sd, ciphertext, ciphertext_len, 0);
